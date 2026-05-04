@@ -1,0 +1,29 @@
+name: 'دانلود و ارسال به بله'
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'لینک مستقیم فایل'
+        required: true
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: دانلود فایل
+        run: curl -L -o file.dat "${{ github.event.inputs.link }}"
+
+      - name: تیکه تیکه کردن ۱۸ مگابایتی
+        run: split -b 18M -d -a 3 file.dat part_
+
+      - name: ارسال تیکه‌ها به بله
+        env:
+          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
+        run: |
+          for piece in part_*; do
+            curl -F chat_id=${CHAT_ID} -F document=@"${piece}" \
+            https://tapi.bale.ai/bot${TOKEN}/sendDocument
+            sleep 2
+          done
