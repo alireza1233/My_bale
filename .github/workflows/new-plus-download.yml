@@ -1,0 +1,110 @@
+name: 'تقسیم و ارسال هوشمندانه به بله (نسخه با اسم قطعات و تعداد)'
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'لینک مستقیم فایل'
+        required: true
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: دریافت اطلاعات فایل (حجم و نام)
+        id: info
+        run: |
+          URL="${{ github.event.inputs.link }}"
+          RAW_FILENAME=$(basename "$URL" | cut -d '?' -f1)
+          [ -z "$RAW_FILENAME" ] && RAW_FILENAME="file"
+          # حذف پسوند آخر برای استفاده در نام قطعات (اختیاری)
+          BASENAME="${RAW_FILENAME%.*}"
+          [ -z "$BASENAME" ] && BASENAME="$RAW_FILENAME"
+          echo "raw_filename=$RAW_FILENAME" >> $GITHUB_OUTPUT
+          echo "basename=$BASENAME" >> $GITHUB_OUTPUT
+          
+          # محاسبه تعداد قطعات از روی هدر Content-Length (بدون دانلود کامل)
+          SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
+          if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
+            NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
+          else
+            NUM_PARTS="نامشخص"
+          fi
+          echo "num_parts=$NUM_PARTS" >> $GITHUB_OUTPUT
+          echo "تعداد قطعات تخمینی: $NUM_PARTS"
+
+      - name: اطلاع‌رسانی شروع (همراه با تعداد قطعات)
+        env:
+          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
+        run: |
+          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم... (هر قطعه با پسوند .7z ارسال می‌شود)"
+          curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
+
+      - name: دانلود فایل اصلی
+        run: curl -L -o original_file.dat "${{ github.event.inputs.link }}"
+
+      - name: تقسیم فایل به قطعات ۱۸ مگابایتی (بدون پسوند موقت)
+        run: split -b 18M -d -a 3 original_file.dat part_
+
+      - name: تغییر نام قطعات به فرمت "نام اصلی.partXXX.7z"
+        run: |
+          BASENAME="${{ steps.info.outputs.basename }}"
+          # اگر بی‌نام شد، از "file" استفاده کن
+          if [ -z "$BASENAME" ]; then BASENAME="file"; fi
+          for file in part_*; do
+            NUMBER=$(echo "$file" | sed 's/part_//')
+            mv "$file" "${BASENAME}.part${NUMBER}.7z"
+          done
+
+      - name: ارسال هوشمندانه قطعات با تلاش مجدد
+        env:
+          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
+        run: |
+          send_with_retry() {
+            local file=$1
+            local max_attempts=5
+            local attempt=1
+            local delay=10
+
+            while [ $attempt -le $max_attempts ]; do
+              echo "تلاش $attempt از $max_attempts برای ارسال $file ..."
+              response=$(curl -s -w "\n%{http_code}" -F chat_id=${CHAT_ID} -F document=@"${file}" https://tapi.bale.ai/bot${TOKEN}/sendDocument)
+              http_code=$(echo "$response" | tail -n1)
+              body=$(echo "$response" | sed '$d')
+
+              if [ "$http_code" -eq 200 ]; then
+                echo "✅ $file با موفقیت ارسال شد."
+                return 0
+              fi
+
+              if [ "$http_code" -eq 429 ]; then
+                echo "⚠️ خطای ازدحام سرور! صبر می‌کنم ${delay} ثانیه..."
+                sleep $delay
+                delay=$((delay * 2))
+                attempt=$((attempt + 1))
+              else
+                echo "❌ خطای غیرمنتظره با کد $http_code برای فایل $file"
+                echo "جزییات خطا: $body"
+                return 1
+              fi
+            done
+            echo "❌ شکست کامل در ارسال $file بعد از $max_attempts بار تلاش"
+            return 1
+          }
+
+          echo "شروع ارسال قطعات با مکانیزم مقاوم..."
+          for piece in *.7z; do
+            send_with_retry "$piece"
+            sleep 2
+          done
+          echo "✅ فرآیند ارسال تکمیل شد."
+
+      - name: گزارش نهایی
+        env:
+          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
+        run: |
+          TEXT="✅ ارسال همه قطعات با موفقیت انجام شد.\n📁 فایل اصلی: ${{ steps.info.outputs.raw_filename }}\n🔧 برای بازسازی: همه فایل‌های .7z را در یک پوشه جمع کن و دستور copy /b (ویندوز) یا cat (لینوکس) را استفاده کن."
+          curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
