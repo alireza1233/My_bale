@@ -1,4 +1,4 @@
-name: 'تقسیم و ارسال هوشمندانه به بله (نسخه با اسم قطعات و تعداد)'
+name: 'تقسیم و ارسال هوشمندانه به بله (نسخه RAR برای اندروید)'
 
 on:
   workflow_dispatch:
@@ -17,13 +17,13 @@ jobs:
           URL="${{ github.event.inputs.link }}"
           RAW_FILENAME=$(basename "$URL" | cut -d '?' -f1)
           [ -z "$RAW_FILENAME" ] && RAW_FILENAME="file"
-          # حذف پسوند آخر برای استفاده در نام قطعات (اختیاری)
+          # نام پایه بدون آخرین پسوند (برای قطعات)
           BASENAME="${RAW_FILENAME%.*}"
           [ -z "$BASENAME" ] && BASENAME="$RAW_FILENAME"
           echo "raw_filename=$RAW_FILENAME" >> $GITHUB_OUTPUT
           echo "basename=$BASENAME" >> $GITHUB_OUTPUT
           
-          # محاسبه تعداد قطعات از روی هدر Content-Length (بدون دانلود کامل)
+          # محاسبه تعداد قطعات از روی هدر Content-Length
           SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
           if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
             NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
@@ -31,14 +31,13 @@ jobs:
             NUM_PARTS="نامشخص"
           fi
           echo "num_parts=$NUM_PARTS" >> $GITHUB_OUTPUT
-          echo "تعداد قطعات تخمینی: $NUM_PARTS"
 
       - name: اطلاع‌رسانی شروع (همراه با تعداد قطعات)
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم... (هر قطعه با پسوند .7z ارسال می‌شود)"
+          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم... (قطعات با فرمت .partX.rar ارسال می‌شوند)"
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
 
       - name: دانلود فایل اصلی
@@ -47,17 +46,17 @@ jobs:
       - name: تقسیم فایل به قطعات ۱۸ مگابایتی (بدون پسوند موقت)
         run: split -b 18M -d -a 3 original_file.dat part_
 
-      - name: تغییر نام قطعات به فرمت "نام اصلی.partXXX.7z"
+      - name: تغییر نام قطعات به فرمت "نام اصلی.partX.rar" (برای سازگاری با اندروید)
         run: |
           BASENAME="${{ steps.info.outputs.basename }}"
-          # اگر بی‌نام شد، از "file" استفاده کن
           if [ -z "$BASENAME" ]; then BASENAME="file"; fi
+          COUNTER=1
           for file in part_*; do
-            NUMBER=$(echo "$file" | sed 's/part_//')
-            mv "$file" "${BASENAME}.part${NUMBER}.7z"
+            mv "$file" "${BASENAME}.part${COUNTER}.rar"
+            COUNTER=$((COUNTER + 1))
           done
 
-      - name: ارسال هوشمندانه قطعات با تلاش مجدد
+      - name: ارسال هوشمندانه قطعات با تلاش مجدد (تا ۵ بار)
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
@@ -67,18 +66,15 @@ jobs:
             local max_attempts=5
             local attempt=1
             local delay=10
-
             while [ $attempt -le $max_attempts ]; do
               echo "تلاش $attempt از $max_attempts برای ارسال $file ..."
               response=$(curl -s -w "\n%{http_code}" -F chat_id=${CHAT_ID} -F document=@"${file}" https://tapi.bale.ai/bot${TOKEN}/sendDocument)
               http_code=$(echo "$response" | tail -n1)
               body=$(echo "$response" | sed '$d')
-
               if [ "$http_code" -eq 200 ]; then
                 echo "✅ $file با موفقیت ارسال شد."
                 return 0
               fi
-
               if [ "$http_code" -eq 429 ]; then
                 echo "⚠️ خطای ازدحام سرور! صبر می‌کنم ${delay} ثانیه..."
                 sleep $delay
@@ -90,21 +86,21 @@ jobs:
                 return 1
               fi
             done
-            echo "❌ شکست کامل در ارسال $file بعد از $max_attempts بار تلاش"
+            echo "❌ شکست کامل بعد از $max_attempts بار تلاش"
             return 1
           }
-
-          echo "شروع ارسال قطعات با مکانیزم مقاوم..."
-          for piece in *.7z; do
+          echo "شروع ارسال قطعات..."
+          for piece in *.rar; do
             send_with_retry "$piece"
             sleep 2
           done
-          echo "✅ فرآیند ارسال تکمیل شد."
 
-      - name: گزارش نهایی
+      - name: گزارش نهایی با آموزش استفاده در اندروید
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          TEXT="✅ ارسال همه قطعات با موفقیت انجام شد.\n📁 فایل اصلی: ${{ steps.info.outputs.raw_filename }}\n🔧 برای بازسازی: همه فایل‌های .7z را در یک پوشه جمع کن و دستور copy /b (ویندوز) یا cat (لینوکس) را استفاده کن."
+          BASENAME="${{ steps.info.outputs.basename }}"
+          RAW="${{ steps.info.outputs.raw_filename }}"
+          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 **نحوه استفاده در اندروید (با اپلیکیشن RAR):**\n1. تمام فایل‌های ${BASENAME}.part*.rar را در یک پوشه در گوشی خود کپی کنید.\n2. اپلیکیشن **RAR** را از کافه‌بازار یا گوگل‌پلی نصب کنید.\n3. در برنامه RAR، به آن پوشه بروید.\n4. روی فایل **${BASENAME}.part1.rar** ضربه بزنید. برنامه به‌طور خودکار همه قطعات را شناسایی کرده و فایل اصلی را نمایش می‌دهد.\n5. حالا می‌توانید فایل اصلی را استخراج کنید.\n\n📌 اگر با RAR مشکل داشتید، از **ZArchiver** استفاده کنید که بسیار قوی و رایگان است.\n\n🔁 در صورت نیاز به بازسازی فایل در ویندوز نیز می‌توانید از دستور copy /b استفاده کنید."
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
