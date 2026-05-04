@@ -6,9 +6,52 @@ on:
       link:
         description: 'لینک مستقیم فایل'
         required: true
+      confirm:
+        description: 'آیا ادامه بدم؟ (بله/خیر)'
+        required: true
+        default: 'خیر'
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      filename: ${{ steps.get_info.outputs.filename }}
+      num_parts: ${{ steps.get_info.outputs.num_parts }}
+      confirmed: ${{ steps.check_confirm.outputs.confirmed }}
+    steps:
+      - name: گرفتن اطلاعات فایل (بدون دانلود)
+        id: get_info
+        run: |
+          URL="${{ github.event.inputs.link }}"
+          FILENAME=$(basename "$URL" | cut -d '?' -f1)
+          if [ -z "$FILENAME" ]; then FILENAME="file.dat"; fi
+          # گرفتن حجم از هدر
+          SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
+          if [ -z "$SIZE" ]; then
+            NUM_PARTS="نامشخص"
+          else
+            NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
+          fi
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          echo "num_parts=$NUM_PARTS" >> $GITHUB_OUTPUT
+          echo "اسم فایل: $FILENAME"
+          echo "تعداد قطعات: $NUM_PARTS"
+
+      - name: بررسی تأیید
+        id: check_confirm
+        run: |
+          CONFIRM="${{ github.event.inputs.confirm }}"
+          if [[ "$CONFIRM" == "بله" || "$CONFIRM" == "yes" || "$CONFIRM" == "ye" || "$CONFIRM" == "y" ]]; then
+            echo "confirmed=true" >> $GITHUB_OUTPUT
+          else
+            echo "confirmed=false" >> $GITHUB_OUTPUT
+            echo "❌ تأیید نشد. لطفاً با confirm=بله دوباره اجرا کن."
+            exit 1
+          fi
+
   send:
+    needs: check
+    if: needs.check.outputs.confirmed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: دانلود فایل
@@ -27,3 +70,4 @@ jobs:
             https://tapi.bale.ai/bot${TOKEN}/sendDocument
             sleep 2
           done
+          echo "✅ ارسال شد. اسم فایل اصلی: ${{ needs.check.outputs.filename }}"
