@@ -1,4 +1,4 @@
-name: 'تقسیم و ارسال هوشمندانه به بله (نسخه 7z برای ZArchiver)'
+name: 'تقسیم و ارسال هوشمندانه به بله (نسخه 7z اصولی)'
 
 on:
   workflow_dispatch:
@@ -17,89 +17,78 @@ jobs:
           URL="${{ github.event.inputs.link }}"
           RAW_FILENAME=$(basename "$URL" | cut -d '?' -f1)
           [ -z "$RAW_FILENAME" ] && RAW_FILENAME="file"
-          # نام پایه بدون آخرین پسوند (برای قطعات)
           BASENAME="${RAW_FILENAME%.*}"
           [ -z "$BASENAME" ] && BASENAME="$RAW_FILENAME"
           echo "raw_filename=$RAW_FILENAME" >> $GITHUB_OUTPUT
           echo "basename=$BASENAME" >> $GITHUB_OUTPUT
-          
-          # محاسبه تعداد قطعات
-          SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
-          if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
-            NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
-          else
-            NUM_PARTS="نامشخص"
-          fi
-          echo "num_parts=$NUM_PARTS" >> $GITHUB_OUTPUT
 
-      - name: اطلاع‌رسانی شروع (همراه با تعداد قطعات)
+      - name: اطلاع‌رسانی شروع
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم... (قطعات با پسوند .7z ارسال می‌شوند)"
+          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n⏳ در حال دانلود و ایجاد آرشیو... (قطعات ۱۸ مگابایتی .7z ساخته می‌شوند)"
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
 
       - name: دانلود فایل اصلی
-        run: curl -L -o original_file.dat "${{ github.event.inputs.link }}"
+        run: |
+          # فایل اصلی را دانلود کن
+          curl -L -o original_file "${{ github.event.inputs.link }}"
+          # پسوند فایل دانلودی را بگیر (مثلاً .zip یا .exe)
+          FILENAME=$(basename "${{ github.event.inputs.link }}")
+          EXTENSION="${FILENAME##*.}"
+          # اگر پسوند معروفی داشت، فایل را در پوشه‌ای به همان نام استخراج کن (برای فایل‌های نصبی مثل exe کار نمی‌کند)
+          if [[ "$EXTENSION" == "zip" || "$EXTENSION" == "tar" || "$EXTENSION" == "gz" || "$EXTENSION" == "bz2" ]]; then
+            mkdir extracted
+            if [[ "$EXTENSION" == "zip" ]]; then
+              unzip original_file -d extracted
+            else
+              tar -xf original_file -C extracted
+            fi
+            COMPRESS_TARGET="extracted"
+          else
+            # اگر فایل فشرده نبود (مثل exe یا jar)، خود فایل را به عنوان هدف فشرده‌سازی قرار بده
+            COMPRESS_TARGET="original_file"
+          fi
+          echo "COMPRESS_TARGET=$COMPRESS_TARGET" >> $GITHUB_ENV
 
-      - name: تقسیم فایل به قطعات ۱۸ مگابایتی
-        run: split -b 18M -d -a 3 original_file.dat part_
+      - name: ایجاد آرشیو 7z چندبخشی (هر قطعه ۱۸ مگابایت)
+        run: |
+          # نصب 7z
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+          # ایجاد آرشیو 7z با قطعات ۱۸ مگابایتی
+          # با این دستور فایل‌های archive.7z.001, archive.7z.002, ... ساخته می‌شوند
+          7z a -v18m -mx0 archive.7z ${{ env.COMPRESS_TARGET }}
 
-      - name: تغییر نام قطعات به فرمت "نام اصلی.partXXX.7z"
+      - name: تغییر نام قطعات به فرمت "نام اصلی.partX.7z" (اختیاری)
         run: |
           BASENAME="${{ steps.info.outputs.basename }}"
           if [ -z "$BASENAME" ]; then BASENAME="file"; fi
-          for file in part_*; do
-            NUMBER=$(echo "$file" | sed 's/part_//')
-            mv "$file" "${BASENAME}.part${NUMBER}.7z"
+          COUNTER=1
+          # توجه: نام فایل‌های تولیدی 7z به صورت archive.7z.001, archive.7z.002, ... است
+          for file in archive.7z.*; do
+            mv "$file" "${BASENAME}.part${COUNTER}.7z"
+            COUNTER=$((COUNTER + 1))
           done
 
-      - name: ارسال هوشمندانه قطعات با تلاش مجدد (تا ۵ بار)
+      - name: ارسال قطعات به بله
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          send_with_retry() {
-            local file=$1
-            local max_attempts=5
-            local attempt=1
-            local delay=10
-            while [ $attempt -le $max_attempts ]; do
-              echo "تلاش $attempt از $max_attempts برای ارسال $file ..."
-              response=$(curl -s -w "\n%{http_code}" -F chat_id=${CHAT_ID} -F document=@"${file}" https://tapi.bale.ai/bot${TOKEN}/sendDocument)
-              http_code=$(echo "$response" | tail -n1)
-              body=$(echo "$response" | sed '$d')
-              if [ "$http_code" -eq 200 ]; then
-                echo "✅ $file با موفقیت ارسال شد."
-                return 0
-              fi
-              if [ "$http_code" -eq 429 ]; then
-                echo "⚠️ خطای ازدحام سرور! صبر می‌کنم ${delay} ثانیه..."
-                sleep $delay
-                delay=$((delay * 2))
-                attempt=$((attempt + 1))
-              else
-                echo "❌ خطای غیرمنتظره با کد $http_code برای فایل $file"
-                echo "جزییات خطا: $body"
-                return 1
-              fi
-            done
-            echo "❌ شکست کامل بعد از $max_attempts بار تلاش"
-            return 1
-          }
-          echo "شروع ارسال قطعات..."
           for piece in *.7z; do
-            send_with_retry "$piece"
+            echo "در حال ارسال $piece ..."
+            curl -s -F chat_id=${CHAT_ID} -F document=@"${piece}" https://tapi.bale.ai/bot${TOKEN}/sendDocument
             sleep 2
           done
 
-      - name: گزارش نهایی با آموزش استفاده در اندروید (ZArchiver)
+      - name: گزارش نهایی با آموزش استفاده
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
           BASENAME="${{ steps.info.outputs.basename }}"
           RAW="${{ steps.info.outputs.raw_filename }}"
-          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 **نحوه استفاده در اندروید (ZArchiver - پیشنهادی):**\n1. تمام فایل‌های ${BASENAME}.part*.7z را در یک پوشه در گوشی کپی کنید.\n2. اپ ZArchiver را از کافه‌بازار یا گوگل‌پلی نصب کنید.\n3. در ZArchiver به آن پوشه بروید.\n4. روی فایل **${BASENAME}.part000.7z** (اولین قطعه) ضربه بزنید.\n5. گزینه **Extract here** را انتخاب کنید. ZArchiver به‌طور خودکار قطعات را ترکیب و فایل اصلی را خارج می‌کند.\n\n📌 اگر با ZArchiver مشکل داشتید، می‌توانید در ویندوز با دستور copy /b ترکیب کنید.\n🔁 برای ترکیب در ویندوز:\ncopy /b ${BASENAME}.part*.7z \"$RAW\""
+          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 **نحوه استفاده در اندروید:**\n1. تمام فایل‌های ${BASENAME}.part*.7z را در یک پوشه در گوشی کپی کنید.\n2. اپلیکیشن **ZArchiver** را باز کنید.\n3. به آن پوشه بروید.\n4. روی فایل **${BASENAME}.part1.7z** ضربه بزنید.\n5. گزینه **Extract here** را انتخاب کنید. ZArchiver به‌طور خودکار قطعات را شناسایی کرده و فایل اصلی را خارج می‌کند."
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
