@@ -6,68 +6,67 @@ on:
       link:
         description: 'لینک مستقیم فایل'
         required: true
-      confirm:
-        description: 'آیا ادامه بدم؟ (بله/خیر)'
-        required: true
-        default: 'خیر'
 
 jobs:
-  check:
+  send:
     runs-on: ubuntu-latest
-    outputs:
-      filename: ${{ steps.get_info.outputs.filename }}
-      num_parts: ${{ steps.get_info.outputs.num_parts }}
-      confirmed: ${{ steps.check_confirm.outputs.confirmed }}
     steps:
-      - name: گرفتن اطلاعات فایل (بدون دانلود)
-        id: get_info
+      - name: دریافت اطلاعات فایل (حجم و نام)
+        id: info
         run: |
           URL="${{ github.event.inputs.link }}"
+          # اسم فایل از آخر لینک
           FILENAME=$(basename "$URL" | cut -d '?' -f1)
-          if [ -z "$FILENAME" ]; then FILENAME="file.dat"; fi
-          # گرفتن حجم از هدر
+          [ -z "$FILENAME" ] && FILENAME="file.dat"
+          # گرفتن حجم فایل بدون دانلود کامل
           SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
-          if [ -z "$SIZE" ]; then
-            NUM_PARTS="نامشخص"
-          else
+          if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
             NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
+          else
+            NUM_PARTS="نامشخص"
           fi
           echo "filename=$FILENAME" >> $GITHUB_OUTPUT
           echo "num_parts=$NUM_PARTS" >> $GITHUB_OUTPUT
-          echo "اسم فایل: $FILENAME"
-          echo "تعداد قطعات: $NUM_PARTS"
+          echo "SIZE=$SIZE" >> $GITHUB_OUTPUT
+          echo "نام فایل: $FILENAME"
+          echo "تعداد قطعات تقریبی: $NUM_PARTS"
 
-      - name: بررسی تأیید
-        id: check_confirm
+      - name: اطلاع‌رسانی به بله (آغاز ارسال)
+        env:
+          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          CONFIRM="${{ github.event.inputs.confirm }}"
-          if [[ "$CONFIRM" == "بله" || "$CONFIRM" == "yes" || "$CONFIRM" == "ye" || "$CONFIRM" == "y" ]]; then
-            echo "confirmed=true" >> $GITHUB_OUTPUT
-          else
-            echo "confirmed=false" >> $GITHUB_OUTPUT
-            echo "❌ تأیید نشد. لطفاً با confirm=بله دوباره اجرا کن."
-            exit 1
-          fi
+          TEXT="📦 در حال پردازش فایل: ${{ steps.info.outputs.filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ لطفاً صبر کنید..."
+          curl -s -X POST \
+            -F chat_id=${CHAT_ID} \
+            -F text="${TEXT}" \
+            https://tapi.bale.ai/bot${TOKEN}/sendMessage
 
-  send:
-    needs: check
-    if: needs.check.outputs.confirmed == 'true'
-    runs-on: ubuntu-latest
-    steps:
       - name: دانلود فایل
         run: curl -L -o file.dat "${{ github.event.inputs.link }}"
 
-      - name: تیکه تیکه کردن ۱۸ مگابایتی
+      - name: تقسیم به قطعات ۱۸ مگابایتی
         run: split -b 18M -d -a 3 file.dat part_
 
-      - name: ارسال تیکه‌ها به بله
+      - name: ارسال قطعات به بله
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
           for piece in part_*; do
-            curl -F chat_id=${CHAT_ID} -F document=@"${piece}" \
-            https://tapi.bale.ai/bot${TOKEN}/sendDocument
+            echo "ارسال $piece ..."
+            curl -s -F chat_id=${CHAT_ID} -F document=@"${piece}" \
+              https://tapi.bale.ai/bot${TOKEN}/sendDocument
             sleep 2
           done
-          echo "✅ ارسال شد. اسم فایل اصلی: ${{ needs.check.outputs.filename }}"
+
+      - name: اطلاع‌رسانی موفقیت
+        env:
+          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
+        run: |
+          TEXT="✅ ارسال همه قطعات با موفقیت انجام شد.\n📁 فایل اصلی: ${{ steps.info.outputs.filename }}\n🔧 برای بازسازی دستور cat یا copy را استفاده کنید."
+          curl -s -X POST \
+            -F chat_id=${CHAT_ID} \
+            -F text="${TEXT}" \
+            https://tapi.bale.ai/bot${TOKEN}/sendMessage
