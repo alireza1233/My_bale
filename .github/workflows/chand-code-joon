@@ -1,48 +1,47 @@
-name: 'چند لینکی'
+name: '(چند لینکی ترتیبی)'
 
 on:
   workflow_dispatch:
     inputs:
       links:
-        description: 'لینک‌های مستقیم فایل‌ها (هر لینک در یک خط)'
+        description: 'لینک‌های مستقیم (هر لینک در یک خط)'
         required: true
-        type: string
 
 jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - name: پردازش ترتیبی همه لینک‌ها
+      - name: پردازش ترتیبی لینک‌ها
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          # تابع ارسال پیام به بله
+          # تابع ارسال پیام
           send_msg() {
             curl -s -X POST -F chat_id=${CHAT_ID} -F text="$1" https://tapi.bale.ai/bot${TOKEN}/sendMessage
           }
           
-          # تابع ارسال قطعه با تلاش مجدد
+          # تابع ارسال فایل با تلاش مجدد
           send_with_retry() {
             local file=$1
             local max_attempts=5
             local attempt=1
             local delay=10
             while [ $attempt -le $max_attempts ]; do
-              echo "تلاش $attempt از $max_attempts برای ارسال $file ..."
+              echo "تلاش $attempt برای ارسال $file"
               response=$(curl -s -w "\n%{http_code}" -F chat_id=${CHAT_ID} -F document=@"${file}" https://tapi.bale.ai/bot${TOKEN}/sendDocument)
               http_code=$(echo "$response" | tail -n1)
               if [ "$http_code" -eq 200 ]; then
-                echo "✅ $file با موفقیت ارسال شد."
+                echo "✅ $file ارسال شد"
                 return 0
               fi
               if [ "$http_code" -eq 429 ]; then
-                echo "⚠️ ازدحام سرور، صبر ${delay} ثانیه..."
+                echo "⚠️ ازدحام، صبر $delay ثانیه"
                 sleep $delay
                 delay=$((delay * 2))
                 attempt=$((attempt + 1))
               else
-                echo "❌ خطا با کد $http_code برای $file"
+                echo "❌ خطا $http_code برای $file"
                 return 1
               fi
             done
@@ -50,64 +49,61 @@ jobs:
             return 1
           }
           
-          # خواندن لینک‌ها (هر خط یک لینک)
-          mapfile -t links <<< "${{ github.event.inputs.links }}"
-          total=${#links[@]}
+          # ذخیره لینک‌ها در یک فایل موقت
+          echo "${{ github.event.inputs.links }}" > links.txt
+          
+          total=$(grep -c '[^[:space:]]' links.txt)
           counter=1
           
-          send_msg "📋 شروع پردازش $total فایل به ترتیب"
+          send_msg "📋 شروع پردازش $total فایل"
           
-          for URL in "${links[@]}"; do
-            # حذف whitespace
+          while IFS= read -r URL || [ -n "$URL" ]; do
+            # حذف فاصله ابتدا و انتها
             URL=$(echo "$URL" | xargs)
             [ -z "$URL" ] && continue
             
-            send_msg "📁 ($counter/$total) شروع پردازش فایل"
+            send_msg "📁 ($counter/$total) در حال پردازش..."
             
-            # استخراج نام فایل
+            # نام فایل از لینک
             RAW_FILENAME=$(basename "$URL" | cut -d '?' -f1)
             [ -z "$RAW_FILENAME" ] && RAW_FILENAME="file_$counter"
             
-            # اطلاع از تعداد قطعات (بدون دانلود کامل)
+            # محاسبه تعداد قطعات
             SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
             if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
               NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
             else
               NUM_PARTS="نامشخص"
             fi
-            send_msg "📦 فایل: $RAW_FILENAME\n🔢 تعداد قطعات ۱۸ مگابایتی: $NUM_PARTS\n⏳ در حال دانلود..."
+            send_msg "📦 $RAW_FILENAME\n🔢 قطعات: $NUM_PARTS\n⏳ دانلود..."
             
-            # دانلود فایل
-            curl -L -o original_file.dat "$URL"
-            if [ $? -ne 0 ]; then
-              send_msg "❌ خطا در دانلود $RAW_FILENAME. رد شدن از این فایل."
-              counter=$((counter + 1))
+            # دانلود
+            curl -L -o original_file.dat "$URL" || {
+              send_msg "❌ خطا در دانلود $RAW_FILENAME، رد شدن"
+              counter=$((counter+1))
               continue
-            fi
+            }
             
-            # تقسیم با split
+            # تقسیم
             split -b 18M -d -a 3 original_file.dat part_
             
-            # تغییر نام قطعات به اسم اصلی.partXXX
+            # تغییر نام
             for file in part_*; do
               NUMBER=$(echo "$file" | sed 's/part_//')
               mv "$file" "${RAW_FILENAME}.part${NUMBER}"
             done
             
-            # ارسال همه قطعات
+            # ارسال قطعات
             for piece in ${RAW_FILENAME}.part*; do
-              if [ -f "$piece" ]; then
-                send_with_retry "$piece"
-                sleep 2
-              fi
+              [ -f "$piece" ] && send_with_retry "$piece" && sleep 2
             done
             
-            # پاکسازی فایل‌های موقت
+            # پاکسازی
             rm -f original_file.dat ${RAW_FILENAME}.part*
             
-            send_msg "✅ ارسال $RAW_FILENAME با موفقیت کامل شد."
-            counter=$((counter + 1))
+            send_msg "✅ $RAW_FILENAME تکمیل شد"
+            counter=$((counter+1))
             sleep 3
-          done
+          done < links.txt
           
-          send_msg "🎉 پردازش همه $total فایل به پایان رسید."
+          send_msg "🎉 همه $total فایل پردازش شدند"
