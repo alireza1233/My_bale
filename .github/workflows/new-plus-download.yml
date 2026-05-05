@@ -1,62 +1,27 @@
-name: 'تقسیم و ارسال با split (نام قطعات = اسم اصلی.partXXX)'
+name: 'تقسیم و ارسال چند فایل ترتیبی (نام قطعات = اسم اصلی.partXXX)'
 
 on:
   workflow_dispatch:
     inputs:
-      link:
-        description: 'لینک مستقیم فایل'
+      links:
+        description: 'لینک‌های مستقیم (با فاصله یا Enter جدا کنید)'
         required: true
 
 jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - name: دریافت اطلاعات فایل (حجم و نام)
-        id: info
+      - name: پردازش ترتیبی لینک‌ها
+        env:
+          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          URL="${{ github.event.inputs.link }}"
-          RAW_FILENAME=$(basename "$URL" | cut -d '?' -f1)
-          [ -z "$RAW_FILENAME" ] && RAW_FILENAME="file"
-          echo "raw_filename=$RAW_FILENAME" >> $GITHUB_OUTPUT
+          # تابع ارسال پیام به بله
+          send_msg() {
+            curl -s -X POST -F chat_id=${CHAT_ID} -F text="$1" https://tapi.bale.ai/bot${TOKEN}/sendMessage
+          }
           
-          # محاسبه تعداد قطعات
-          SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
-          if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
-            NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
-          else
-            NUM_PARTS="نامشخص"
-          fi
-          echo "num_parts=$NUM_PARTS" >> $GITHUB_OUTPUT
-
-      - name: اطلاع‌رسانی شروع (همراه با تعداد قطعات)
-        env:
-          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
-        run: |
-          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم..."
-          curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
-
-      - name: دانلود فایل اصلی
-        run: curl -L -o original_file.dat "${{ github.event.inputs.link }}"
-
-      - name: تقسیم فایل با split (۱۸ مگابایت، پیشوند part_)
-        run: split -b 18M -d -a 3 original_file.dat part_
-
-      - name: تغییر نام قطعات به فرمت "اسم اصلی.partXXX"
-        run: |
-          BASENAME="${{ steps.info.outputs.raw_filename }}"
-          echo "BASENAME=$BASENAME" >> $GITHUB_ENV
-          for file in part_*; do
-            NUMBER=$(echo "$file" | sed 's/part_//')
-            mv "$file" "${BASENAME}.part${NUMBER}"
-          done
-          ls -la ${BASENAME}.part*  # فقط برای دیباگ
-
-      - name: ارسال قطعات با تلاش مجدد (تا ۵ بار)
-        env:
-          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
-        run: |
+          # تابع ارسال قطعه با تلاش مجدد (همان کد خودتان)
           send_with_retry() {
             local file=$1
             local max_attempts=5
@@ -83,26 +48,70 @@ jobs:
             echo "❌ شکست بعد از $max_attempts تلاش"
             return 1
           }
-          # استفاده از BASENAME که در GITHUB_ENV ذخیره شده
-          BASENAME="${{ env.BASENAME }}"
-          if [ -z "$BASENAME" ]; then
-            echo "خطا: BASENAME تعریف نشده است"
+          
+          # خواندن لینک‌ها (جداکننده: فاصله یا خط جدید)
+          INPUT="${{ github.event.inputs.links }}"
+          # تبدیل newline به فاصله، سپس ساخت آرایه
+          LINKS=$(echo "$INPUT" | tr '\n' ' ')
+          read -ra URL_ARRAY <<< "$LINKS"
+          
+          total=${#URL_ARRAY[@]}
+          if [ $total -eq 0 ]; then
+            send_msg "❌ هیچ لینکی وارد نشده"
             exit 1
           fi
-          for piece in ${BASENAME}.part*; do
-            if [ -f "$piece" ]; then
-              send_with_retry "$piece"
-              sleep 2
+          
+          send_msg "📋 شروع پردازش $total فایل به ترتیب"
+          counter=1
+          
+          for URL in "${URL_ARRAY[@]}"; do
+            [ -z "$URL" ] && continue
+            
+            send_msg "📁 ($counter/$total) شروع پردازش فایل"
+            
+            RAW_FILENAME=$(basename "$URL" | cut -d '?' -f1)
+            [ -z "$RAW_FILENAME" ] && RAW_FILENAME="file_$counter"
+            
+            # محاسبه تعداد قطعات (بدون دانلود کامل)
+            SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
+              NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
             else
-              echo "فایل $piece یافت نشد"
+              NUM_PARTS="نامشخص"
             fi
+            
+            send_msg "📦 فایل: $RAW_FILENAME\n🔢 قطعات: $NUM_PARTS\n⏳ در حال دانلود..."
+            
+            # دانلود
+            curl -L -o original_file.dat "$URL" || {
+              send_msg "❌ خطا در دانلود $RAW_FILENAME. رد شدن از این فایل."
+              counter=$((counter+1))
+              continue
+            }
+            
+            # تقسیم
+            split -b 18M -d -a 3 original_file.dat part_
+            
+            # تغییر نام قطعات
+            for file in part_*; do
+              NUMBER=$(echo "$file" | sed 's/part_//')
+              mv "$file" "${RAW_FILENAME}.part${NUMBER}"
+            done
+            
+            # ارسال قطعات
+            for piece in ${RAW_FILENAME}.part*; do
+              if [ -f "$piece" ]; then
+                send_with_retry "$piece"
+                sleep 2
+              fi
+            done
+            
+            # پاکسازی
+            rm -f original_file.dat ${RAW_FILENAME}.part*
+            
+            send_msg "✅ ارسال $RAW_FILENAME با موفقیت کامل شد."
+            counter=$((counter+1))
+            sleep 3
           done
-
-      - name: گزارش نهایی با دستور ترکیب
-        env:
-          TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
-        run: |
-          RAW="${{ steps.info.outputs.raw_filename }}"
-          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 **برای ترکیب در ویندوز (CMD):**\n\ncopy /b \"${RAW}.part*\" \"$RAW\"\n\n(همه قطعات باید در یک پوشه باشند.)"
-          curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
+          
+          send_msg "🎉 پردازش همه $total فایل به پایان رسید."
