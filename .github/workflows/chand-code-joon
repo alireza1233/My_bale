@@ -1,4 +1,4 @@
-name: 'تقسیم و ارسال با split (نام قطعات = اسم اصلی.partXXX) - چند لینکی'
+name: 'چند لینکی'
 
 on:
   workflow_dispatch:
