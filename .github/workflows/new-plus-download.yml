@@ -33,24 +33,24 @@ jobs:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم... قطعات به صورت 'اسم اصلی.part000', 'اسم اصلی.part001', ... ارسال می‌شوند."
+          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم..."
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
 
       - name: دانلود فایل اصلی
         run: curl -L -o original_file.dat "${{ github.event.inputs.link }}"
 
-      - name: تقسیم فایل با split (۱۸ مگابایت، پیشوند part_ موقت)
+      - name: تقسیم فایل با split (۱۸ مگابایت، پیشوند part_)
         run: split -b 18M -d -a 3 original_file.dat part_
 
       - name: تغییر نام قطعات به فرمت "اسم اصلی.partXXX"
         run: |
           BASENAME="${{ steps.info.outputs.raw_filename }}"
-          # حذف پسوند برای جلوگیری از تکرار؟ نه، خود اسم اصلی را می‌خواهیم.
-          # اما اگر اسم اصلی خودش دارای نقطه است، اشکالی ندارد.
+          echo "BASENAME=$BASENAME" >> $GITHUB_ENV
           for file in part_*; do
             NUMBER=$(echo "$file" | sed 's/part_//')
             mv "$file" "${BASENAME}.part${NUMBER}"
           done
+          ls -la ${BASENAME}.part*  # فقط برای دیباگ
 
       - name: ارسال قطعات با تلاش مجدد (تا ۵ بار)
         env:
@@ -83,9 +83,19 @@ jobs:
             echo "❌ شکست بعد از $max_attempts تلاش"
             return 1
           }
+          # استفاده از BASENAME که در GITHUB_ENV ذخیره شده
+          BASENAME="${{ env.BASENAME }}"
+          if [ -z "$BASENAME" ]; then
+            echo "خطا: BASENAME تعریف نشده است"
+            exit 1
+          fi
           for piece in ${BASENAME}.part*; do
-            send_with_retry "$piece"
-            sleep 2
+            if [ -f "$piece" ]; then
+              send_with_retry "$piece"
+              sleep 2
+            else
+              echo "فایل $piece یافت نشد"
+            fi
           done
 
       - name: گزارش نهایی با دستور ترکیب
@@ -94,5 +104,5 @@ jobs:
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
           RAW="${{ steps.info.outputs.raw_filename }}"
-          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 **برای ترکیب در ویندوز (CMD):**\n\ COPY /B ${RAW}.part* \"$RAW\"\n\n(همه قطعات باید در یک پوشه باشند. ترتیب عددی .part000, .part001, ... رعایت می‌شود.)"
+          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 **برای ترکیب در ویندوز (CMD):**\n\ncopy /b \"${RAW}.part*\" \"$RAW\"\n\n(همه قطعات باید در یک پوشه باشند.)"
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
