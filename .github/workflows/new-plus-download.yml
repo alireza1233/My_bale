@@ -1,4 +1,4 @@
-name: 'تقسیم و ارسال ساده با split (مناسب برای ترکیب با copy /b)'
+name: 'تقسیم و ارسال با split (نام قطعات = اسم اصلی.partXXX)'
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
           [ -z "$RAW_FILENAME" ] && RAW_FILENAME="file"
           echo "raw_filename=$RAW_FILENAME" >> $GITHUB_OUTPUT
           
-          # محاسبه تعداد قطعات از روی هدر
+          # محاسبه تعداد قطعات
           SIZE=$(curl -sI -L "$URL" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
           if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ]; then
             NUM_PARTS=$(( (SIZE + 18*1024*1024 - 1) / (18*1024*1024) ))
@@ -33,14 +33,24 @@ jobs:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
-          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم با split... (قطعات part_000, part_001, ...)"
+          TEXT="📦 فایل: ${{ steps.info.outputs.raw_filename }}\n🔢 تعداد قطعات ۱۸ مگابایتی: ${{ steps.info.outputs.num_parts }}\n⏳ در حال دانلود و تقسیم... قطعات به صورت 'اسم اصلی.part000', 'اسم اصلی.part001', ... ارسال می‌شوند."
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
 
       - name: دانلود فایل اصلی
         run: curl -L -o original_file.dat "${{ github.event.inputs.link }}"
 
-      - name: تقسیم فایل با split (۱۸ مگابایت، پیشوند part_)
+      - name: تقسیم فایل با split (۱۸ مگابایت، پیشوند part_ موقت)
         run: split -b 18M -d -a 3 original_file.dat part_
+
+      - name: تغییر نام قطعات به فرمت "اسم اصلی.partXXX"
+        run: |
+          BASENAME="${{ steps.info.outputs.raw_filename }}"
+          # حذف پسوند برای جلوگیری از تکرار؟ نه، خود اسم اصلی را می‌خواهیم.
+          # اما اگر اسم اصلی خودش دارای نقطه است، اشکالی ندارد.
+          for file in part_*; do
+            NUMBER=$(echo "$file" | sed 's/part_//')
+            mv "$file" "${BASENAME}.part${NUMBER}"
+          done
 
       - name: ارسال قطعات با تلاش مجدد (تا ۵ بار)
         env:
@@ -73,16 +83,16 @@ jobs:
             echo "❌ شکست بعد از $max_attempts تلاش"
             return 1
           }
-          for piece in part_*; do
+          for piece in ${BASENAME}.part*; do
             send_with_retry "$piece"
             sleep 2
           done
 
-      - name: گزارش نهایی
+      - name: گزارش نهایی با دستور ترکیب
         env:
           TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
         run: |
           RAW="${{ steps.info.outputs.raw_filename }}"
-          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 برای ترکیب در ویندوز:\ncopy /b part_* \"$RAW\"\n\n(اطمینان حاصل کنید همه قطعات در یک پوشه هستند و به ترتیب عددی part_000 تا part_xxx قرار دارند.)"
+          TEXT="✅ ارسال قطعات فایل '$RAW' با موفقیت انجام شد.\n\n🔧 **برای ترکیب در ویندوز (CMD):**\n\ COPY /B ${RAW}.part* \"$RAW\"\n\n(همه قطعات باید در یک پوشه باشند. ترتیب عددی .part000, .part001, ... رعایت می‌شود.)"
           curl -s -X POST -F chat_id=${CHAT_ID} -F text="${TEXT}" https://tapi.bale.ai/bot${TOKEN}/sendMessage
