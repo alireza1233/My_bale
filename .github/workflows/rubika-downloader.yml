@@ -1,4 +1,4 @@
-name: 'ارسال فایل کامل به ربات روبیکا (بدون تقسیم)'
+name: 'ارسال فایل به روبیکا (اصلاح شده)'
 
 on:
   workflow_dispatch:
@@ -11,24 +11,29 @@ jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - name: نصب پایتون و کتابخانه‌ها
+      - name: نصب کتابخانه‌ها
         run: |
           python -m pip install --upgrade pip
           pip install rubpy aiohttp
 
-      - name: ساخت اسکریپت پایتون
+      - name: ایجاد و اجرای اسکریپت ارسال فایل
+        env:
+          TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
+          FILE_URL: ${{ github.event.inputs.link }}
         run: |
           cat > send.py << 'EOF'
           import asyncio
           import aiohttp
           import os
-          from rubpy import Client
+          from rubpy.bot import BotClient       # تغییر مهم: ایمپورت از rubpy.bot
 
           async def main():
               token = os.environ['TOKEN']
               chat_id = os.environ['CHAT_ID']
               url = os.environ['FILE_URL']
 
+              # استخراج نام فایل از لینک
               filename = url.split('/')[-1].split('?')[0]
               if not filename:
                   filename = 'downloaded_file'
@@ -40,24 +45,24 @@ jobs:
                           f.write(await resp.read())
               print("دانلود کامل شد.")
 
-              async with Client(bot_token=token) as bot:
-                  print("در حال ارسال به روبیکا...")
-                  await bot.send_document(
-                      object_guid=chat_id,
-                      document=filename,
-                      caption="🎯 فایل درخواستی شما"
-                  )
-                  print("✅ ارسال موفق بود.")
+              # اتصال با توکن ربات با استفاده از BotClient
+              bot = BotClient(token)            # تغییر مهم: نحوه صحیح مقداردهی
+              print("در حال ارسال فایل به روبیکا...")
 
+              # ارسال فایل به عنوان سند
+              result = await bot.send_document(
+                  chat_id=chat_id,              # تغییر مهم: پارامتر صحیح chat_id
+                  document=filename,
+                  caption="🎯 فایل درخواستی شما"
+              )
+
+              print("✅ فایل با موفقیت ارسال شد.")
+
+              # بستن اتصال و پاکسازی
+              await bot.close()
               os.remove(filename)
-              print("فایل موقت پاک شد.")
 
-          asyncio.run(main())
+          if __name__ == "__main__":
+              asyncio.run(main())
           EOF
-
-      - name: اجرای اسکریپت
-        env:
-          TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
-          FILE_URL: ${{ github.event.inputs.link }}
-        run: python send.py
+          python send.py
