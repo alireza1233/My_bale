@@ -1,4 +1,4 @@
-name: 'ارسال فایل به روبیکا (نهایی)'
+name: 'ارسال فایل به روبیکا (بدون Caption)'
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
                           f.write(await r.read())
               print('Download done')
               bot = BotClient(token)
-              await bot.send_file(chat_id, fname, caption='Done')
+              await bot.send_file(chat_id, fname)  # <--- ببین، اینجا caption حذف شده
               await bot.close()
               os.remove(fname)
               print('Success')
