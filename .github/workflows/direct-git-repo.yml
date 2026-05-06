@@ -1,62 +1,54 @@
-name: 'دانلود، تقسیم و ذخیره در مخزن (نسخه نهایی)'
+name: Download file from URL and push to repo
 
 on:
   workflow_dispatch:
     inputs:
       file_url:
-        description: 'لینک فایل مورد نظر (از بخش Releases)'
+        description: 'لینک مستقیم فایل (مثلاً لینک دانلود از Release)'
         required: true
+      target_folder:
+        description: 'پوشه مقصد در مخزن (مثلاً downloads)'
+        required: false
+        default: 'downloads'
+      target_filename:
+        description: 'نام فایل در مخزن (اختیاری - اگر خالی بذاری از اسم اصلی لینک میگیره)'
+        required: false
 
 jobs:
-  download-and-split:
+  download-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: دانلود فایل تخصصی از Release
-        id: download
-        uses: robinraju/release-downloader@v1.11
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          repository: "alireza1233/my_flutter_app"
-          tag: "env-3"
-          fileName: "full-build-env.part.000"
-          out-file-path: "temp_download"
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: نمایش لینک فایل دانلود شده
+      - name: Extract filename from URL (if not provided)
+        id: filename
         run: |
-          echo "فایل با موفقیت دانلود شد. مسیر فایل:"
-          echo "${{ steps.download.outputs.downloaded_files }}"
-
-      - name: تقسیم فایل به قطعات ۹۵ مگابایتی
-        run: |
-          RANDOM_DIR=$(openssl rand -hex 8)
-          mkdir -p "$RANDOM_DIR"
-          echo "📁 پوشه نهایی: $RANDOM_DIR"
-
-          FILE_NAME=$(basename "${{ steps.download.outputs.dilename }}")
-          if [[ -z "$FILE_NAME" ]]; then
-            echo "خطا: نام فایل پیدا نشد!"
-            exit 1
+          if [ -n "${{ github.event.inputs.target_filename }}" ]; then
+            echo "FILENAME=${{ github.event.inputs.target_filename }}" >> $GITHUB_OUTPUT
+          else
+            URL="${{ github.event.inputs.file_url }}"
+            NAME=$(basename "$URL" | cut -d '?' -f1)
+            echo "FILENAME=$NAME" >> $GITHUB_OUTPUT
           fi
 
-          mv "temp_download/$FILE_NAME" "./$RANDOM_DIR/$FILE_NAME"
-          cd "$RANDOM_DIR"
-          
-          echo "✂️ در حال تقسیم فایل به قطعات ۹۵ مگابایتی..."
-          split -b 95M "$FILE_NAME" "part_"
-          rm -f "$FILE_NAME" # فایل اصلی حذف میشه و فقط قطعات می‌مونه
-          cd ..
+      - name: Create target directory
+        run: |
+          mkdir -p "${{ github.event.inputs.target_folder }}"
 
-          echo "RANDOM_DIR_NAME=$RANDOM_DIR" >> $GITHUB_ENV
+      - name: Download file
+        run: |
+          curl -L -o "${{ github.event.inputs.target_folder }}/${{ steps.filename.outputs.FILENAME }}" \
+            "${{ github.event.inputs.file_url }}"
 
-      - name: آپلود قطعات در مخزن github
+      - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          git add .
-          git commit -m "افزودن قطعات فایل از لینک: ${{ github.event.inputs.file_url }}"
+          git add "${{ github.event.inputs.target_folder }}/${{ steps.filename.outputs.FILENAME }}"
+          git commit -m "Add downloaded file: ${{ steps.filename.outputs.FILENAME }}" || echo "No changes"
           git push
