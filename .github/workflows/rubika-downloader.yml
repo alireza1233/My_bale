@@ -1,4 +1,4 @@
-name: 'ارسال فایل به روبیکا با API مستقیم'
+name: ارسال فایل به روبیکا (API رسمی)
 
 on:
   workflow_dispatch:
@@ -11,49 +11,19 @@ jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - name: نصب کتابخانه requests
-        run: pip install requests
+      - name: دانلود فایل از لینک
+        env:
+          URL: ${{ github.event.inputs.link }}
+        run: |
+          FILENAME=$(basename "$URL" | cut -d '?' -f1)
+          curl -L -o "$FILENAME" "$URL"
+          echo "FILENAME=$FILENAME" >> $GITHUB_ENV
 
-      - name: دانلود و ارسال فایل به روبیکا
+      - name: ارسال فایل به روبیکا با API رسمی
         env:
           TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
-          URL: ${{ github.event.inputs.link }}
         run: |
-          python -c "
-          import requests
-          import os
-          import json
-
-          token = os.environ['TOKEN']
-          chat_id = os.environ['CHAT_ID']
-          url = os.environ['URL']
-
-          # 1. دانلود فایل
-          fname = url.split('/')[-1].split('?')[0] or 'file.dat'
-          print(f'Downloading: {fname}')
-          response = requests.get(url, stream=True)
-          total_size = int(response.headers.get('content-length', 0))
-          if response.status_code != 200:
-              print(f'Download error: {response.status_code}')
-              exit(1)
-          with open(fname, 'wb') as f:
-              for chunk in response.iter_content(chunk_size=8192):
-                  f.write(chunk)
-          print(f'Download completed: {total_size} bytes')
-
-          # 2. ارسال فایل با استفاده از API روبیکا
-          api_url = f'https://api.rubika.ir/bot{token}/sendDocument'
-          with open(fname, 'rb') as f:
-              files = {'document': (fname, f, 'application/octet-stream')}
-              data = {'chat_id': chat_id}
-              print('Sending file...')
-              resp = requests.post(api_url, data=data, files=files)
-              if resp.status_code == 200 and resp.json().get('ok'):
-                  print('✅ File sent successfully!')
-              else:
-                  print(f'❌ Send error: {resp.text}')
-                  exit(1)
-          os.remove(fname)
-          print('Cleanup done.')
-          "
+          curl -X POST "https://botapi.rubika.ir/v3/${TOKEN}/sendDocument" \
+            -F "chat_id=${CHAT_ID}" \
+            -F "document=@${FILENAME}"
