@@ -1,4 +1,4 @@
-name: ارسال فایل به روبیکا (API رسمی)
+name: 'ارسال فایل به روبیکا (تقسیم خودکار)'
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - name: دانلود فایل از لینک
+      - name: دانلود فایل
         env:
           URL: ${{ github.event.inputs.link }}
         run: |
@@ -19,11 +19,29 @@ jobs:
           curl -L -o "$FILENAME" "$URL"
           echo "FILENAME=$FILENAME" >> $GITHUB_ENV
 
-      - name: ارسال فایل به روبیکا با API رسمی
+      - name: تقسیم و ارسال قطعات
         env:
           TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
         run: |
-          curl -X POST "https://botapi.rubika.ir/v3/${TOKEN}/sendDocument" \
-            -F "chat_id=${CHAT_ID}" \
-            -F "document=@${FILENAME}"
+          FILE="$FILENAME"
+          # حجم هر قطعه به بایت (40 مگابایت)
+          CHUNK_SIZE=$((40 * 1024 * 1024))
+          PART_NUM=1
+          
+          # تقسیم فایل با استفاده از split
+          split -b $CHUNK_SIZE "$FILE" part_
+          
+          # ارسال هر قطعه
+          for part in part_*; do
+            echo "Sending $part (Part $PART_NUM)..."
+            curl -X POST "https://botapi.rubika.ir/v3/${TOKEN}/sendDocument" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "document=@$part"
+            echo ""
+            PART_NUM=$((PART_NUM + 1))
+            sleep 2
+          done
+          
+          # پاکسازی
+          rm -f "$FILE" part_*
