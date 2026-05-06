@@ -1,4 +1,4 @@
-name: 'ارسال فایل به روبیکا (بدون Caption)'
+name: 'ارسال فایل به روبیکا با API مستقیم'
 
 on:
   workflow_dispatch:
@@ -11,36 +11,49 @@ jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - name: نصب کتابخانه
-        run: pip install rubpy aiohttp
+      - name: نصب کتابخانه requests
+        run: pip install requests
 
-      - name: دانلود و ارسال فایل
+      - name: دانلود و ارسال فایل به روبیکا
         env:
           TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
           URL: ${{ github.event.inputs.link }}
         run: |
           python -c "
-          import asyncio, aiohttp, os
-          from rubpy.bot import BotClient
-          async def main():
-              token = os.environ['TOKEN']
-              chat_id = os.environ['CHAT_ID']
-              url = os.environ['URL']
-              fname = url.split('/')[-1].split('?')[0] or 'file.bin'
-              print('Downloading...')
-              async with aiohttp.ClientSession() as s:
-                  async with s.get(url) as r:
-                      if r.status != 200:
-                          print(f'Download error: {r.status}')
-                          return
-                      with open(fname, 'wb') as f:
-                          f.write(await r.read())
-              print('Download done')
-              bot = BotClient(token)
-              await bot.send_file(chat_id, fname)  # <--- ببین، اینجا caption حذف شده
-              await bot.close()
-              os.remove(fname)
-              print('Success')
-          asyncio.run(main())
+          import requests
+          import os
+          import json
+
+          token = os.environ['TOKEN']
+          chat_id = os.environ['CHAT_ID']
+          url = os.environ['URL']
+
+          # 1. دانلود فایل
+          fname = url.split('/')[-1].split('?')[0] or 'file.dat'
+          print(f'Downloading: {fname}')
+          response = requests.get(url, stream=True)
+          total_size = int(response.headers.get('content-length', 0))
+          if response.status_code != 200:
+              print(f'Download error: {response.status_code}')
+              exit(1)
+          with open(fname, 'wb') as f:
+              for chunk in response.iter_content(chunk_size=8192):
+                  f.write(chunk)
+          print(f'Download completed: {total_size} bytes')
+
+          # 2. ارسال فایل با استفاده از API روبیکا
+          api_url = f'https://api.rubika.ir/bot{token}/sendDocument'
+          with open(fname, 'rb') as f:
+              files = {'document': (fname, f, 'application/octet-stream')}
+              data = {'chat_id': chat_id}
+              print('Sending file...')
+              resp = requests.post(api_url, data=data, files=files)
+              if resp.status_code == 200 and resp.json().get('ok'):
+                  print('✅ File sent successfully!')
+              else:
+                  print(f'❌ Send error: {resp.text}')
+                  exit(1)
+          os.remove(fname)
+          print('Cleanup done.')
           "
