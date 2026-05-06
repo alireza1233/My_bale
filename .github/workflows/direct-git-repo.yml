@@ -1,21 +1,22 @@
-name: Download file from URL and push to repo
+name: Download, split into 95MB parts, and push to repo
 
 on:
   workflow_dispatch:
     inputs:
       file_url:
-        description: 'لینک مستقیم فایل (مثلاً لینک دانلود از Release)'
+        description: 'لینک مستقیم فایل بزرگ (مثلاً از Release)'
         required: true
       target_folder:
-        description: 'پوشه مقصد در مخزن (مثلاً downloads)'
+        description: 'پوشه مقصد در مخزن برای قطعات'
         required: false
         default: 'downloads'
-      target_filename:
-        description: 'نام فایل در مخزن (اختیاری - اگر خالی بذاری از اسم اصلی لینک میگیره)'
+      part_prefix:
+        description: 'پیشوند نام قطعات (بدون پسوند، مثلاً myfile)'
         required: false
+        default: 'downloaded-part'
 
 jobs:
-  download-and-push:
+  download-split-push:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -25,30 +26,25 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract filename from URL (if not provided)
-        id: filename
-        run: |
-          if [ -n "${{ github.event.inputs.target_filename }}" ]; then
-            echo "FILENAME=${{ github.event.inputs.target_filename }}" >> $GITHUB_OUTPUT
-          else
-            URL="${{ github.event.inputs.file_url }}"
-            NAME=$(basename "$URL" | cut -d '?' -f1)
-            echo "FILENAME=$NAME" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create target directory
-        run: |
-          mkdir -p "${{ github.event.inputs.target_folder }}"
-
       - name: Download file
         run: |
-          curl -L -o "${{ github.event.inputs.target_folder }}/${{ steps.filename.outputs.FILENAME }}" \
-            "${{ github.event.inputs.file_url }}"
+          curl -L -o original_file "${{ github.event.inputs.file_url }}"
 
-      - name: Commit and push
+      - name: Split into 95MB parts
+        run: |
+          mkdir -p "${{ github.event.inputs.target_folder }}"
+          # split: 95MB, numeric suffix, 3 digits
+          split -b 95M -d -a 3 original_file "${{ github.event.inputs.target_folder }}/${{ github.event.inputs.part_prefix }}."
+          # این دستور فایل هایی مثل downloaded-part.000، downloaded-part.001 و ... میسازه
+
+      - name: Remove original large file (optional)
+        run: rm -f original_file
+
+      - name: Commit and push all parts
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "${{ github.event.inputs.target_folder }}/${{ steps.filename.outputs.FILENAME }}"
-          git commit -m "Add downloaded file: ${{ steps.filename.outputs.FILENAME }}" || echo "No changes"
+          git add "${{ github.event.inputs.target_folder }}/"
+          # برای اطمینان از اینکه همه فایل‌ها اضافه شوند
+          git commit -m "Add split parts (95MB each) from downloaded file" || echo "No changes to commit"
           git push
