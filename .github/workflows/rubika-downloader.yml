@@ -1,4 +1,4 @@
-name: 'ارسال فایل به روبیکا (تقسیم ۴۰ مگابایتی)'
+name: 'ارسال فایل به روبیکا (تقسیم ۹ مگابایتی)'
 
 on:
   workflow_dispatch:
@@ -19,13 +19,13 @@ jobs:
           curl -L -o "$FILENAME" "$URL"
           echo "FILENAME=$FILENAME" >> $GITHUB_ENV
 
-      - name: تقسیم و ارسال قطعات ۴۰ مگابایتی
+      - name: تقسیم و ارسال قطعات ۹ مگابایتی
         env:
           TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
         run: |
           FILE="$FILENAME"
-          CHUNK_SIZE=$((40 * 1024 * 1024))
+          CHUNK_SIZE=$((9 * 1024 * 1024))
           split -b $CHUNK_SIZE "$FILE" part_
           
           PART_NUM=1
