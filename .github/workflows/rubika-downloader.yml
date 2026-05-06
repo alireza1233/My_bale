@@ -1,4 +1,4 @@
-name: 'ارسال فایل به روبیکا (اصلاح شده)'
+name: 'ارسال فایل به روبیکا (نسخه اصلاح شده)'
 
 on:
   workflow_dispatch:
@@ -11,58 +11,58 @@ jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - name: نصب کتابخانه‌ها
+      - name: نصب کتابخانه
         run: |
           python -m pip install --upgrade pip
           pip install rubpy aiohttp
 
-      - name: ایجاد و اجرای اسکریپت ارسال فایل
+      - name: اجرای اسکریپت دانلود و ارسال
         env:
           TOKEN: ${{ secrets.RUBIKA_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.RUBIKA_CHAT_ID }}
           FILE_URL: ${{ github.event.inputs.link }}
         run: |
-          cat > send.py << 'EOF'
-          import asyncio
-          import aiohttp
-          import os
-          from rubpy.bot import BotClient       # تغییر مهم: ایمپورت از rubpy.bot
+          python - <<EOF
+import asyncio
+import aiohttp
+import os
+from rubpy.bot import BotClient
 
-          async def main():
-              token = os.environ['TOKEN']
-              chat_id = os.environ['CHAT_ID']
-              url = os.environ['FILE_URL']
+async def main():
+    token = os.environ['TOKEN']
+    chat_id = os.environ['CHAT_ID']
+    url = os.environ['FILE_URL']
+    
+    filename = url.split('/')[-1].split('?')[0]
+    if not filename:
+        filename = 'downloaded_file'
+    
+    print(f"در حال دانلود: {filename}")
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            # بررسی موفقیت‌آمیز بودن دانلود
+            if resp.status != 200:
+                print(f"خطا در دانلود! کد وضعیت: {resp.status}")
+                return
+            with open(filename, 'wb') as f:
+                f.write(await resp.read())
+    print("دانلود کامل شد.")
+    
+    # ایجاد نمونه از ربات با استفاده از توکن
+    bot = BotClient(token)
+    print("در حال ارسال فایل به روبیکا...")
+    
+    # ارسال فایل با استفاده از متد send_file
+    # پارامترها: chat_id, file, caption
+    result = await bot.send_file(chat_id, filename, caption="🎯 فایل درخواستی شما")
+    
+    print("✅ فایل با موفقیت ارسال شد.")
+    
+    # بستن اتصال ربات و پاکسازی فایل
+    await bot.close()
+    os.remove(filename)
+    print("پاکسازی انجام شد.")
 
-              # استخراج نام فایل از لینک
-              filename = url.split('/')[-1].split('?')[0]
-              if not filename:
-                  filename = 'downloaded_file'
-
-              print(f"در حال دانلود: {filename}")
-              async with aiohttp.ClientSession() as session:
-                  async with session.get(url) as resp:
-                      with open(filename, 'wb') as f:
-                          f.write(await resp.read())
-              print("دانلود کامل شد.")
-
-              # اتصال با توکن ربات با استفاده از BotClient
-              bot = BotClient(token)            # تغییر مهم: نحوه صحیح مقداردهی
-              print("در حال ارسال فایل به روبیکا...")
-
-              # ارسال فایل به عنوان سند
-              result = await bot.send_document(
-                  chat_id=chat_id,              # تغییر مهم: پارامتر صحیح chat_id
-                  document=filename,
-                  caption="🎯 فایل درخواستی شما"
-              )
-
-              print("✅ فایل با موفقیت ارسال شد.")
-
-              # بستن اتصال و پاکسازی
-              await bot.close()
-              os.remove(filename)
-
-          if __name__ == "__main__":
-              asyncio.run(main())
-          EOF
-          python send.py
+if __name__ == "__main__":
+    asyncio.run(main())
+EOF
