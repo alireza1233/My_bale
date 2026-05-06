@@ -1,45 +1,62 @@
-name: 'دانلود، تقسیم و ذخیره (با نمایش پیشرفت)'
+name: 'دانلود، تقسیم و ذخیره در مخزن (نسخه نهایی)'
 
 on:
   workflow_dispatch:
     inputs:
-      url:
-        description: 'لینک مستقیم فایل'
+      file_url:
+        description: 'لینک فایل مورد نظر (از بخش Releases)'
         required: true
 
 jobs:
-  split-and-save:
+  download-and-split:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: دانلود با wget
-        run: |
-          ORIGINAL_NAME=$(basename "${{ github.event.inputs.url }}" | cut -d '?' -f1)
-          RANDOM_DIR=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)
-          mkdir -p "$RANDOM_DIR"
-          
-          echo "📁 پوشه: $RANDOM_DIR"
-          echo "📥 در حال دانلود فایل (حدود 1.8 گیگابایت)..."
-          
-          wget -O "$RANDOM_DIR/$ORIGINAL_NAME" --progress=dot:giga "${{ github.event.inputs.url }}"
-          
-          echo "✅ دانلود کامل شد."
-          
-          cd "$RANDOM_DIR"
-          echo "✂️ تقسیم به قطعات ۹۵ مگابایتی..."
-          split -b 95M "$ORIGINAL_NAME" "part_"
-          rm -f "$ORIGINAL_NAME"
-          cd ..
-          
-          echo "RANDOM_DIR=$RANDOM_DIR" >> $GITHUB_ENV
+      - name: دانلود فایل تخصصی از Release
+        id: download
+        uses: robinraju/release-downloader@v1.11
+        with:
+          repository: "alireza1233/my_flutter_app"
+          tag: "env-3"
+          fileName: "full-build-env.part.000"
+          out-file-path: "temp_download"
 
-      - name: ذخیره در مخزن
+      - name: نمایش لینک فایل دانلود شده
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add "${{ env.RANDOM_DIR }}"
-          git commit -m "افزودن قطعات از ${{ github.event.inputs.url }}"
+          echo "فایل با موفقیت دانلود شد. مسیر فایل:"
+          echo "${{ steps.download.outputs.downloaded_files }}"
+
+      - name: تقسیم فایل به قطعات ۹۵ مگابایتی
+        run: |
+          RANDOM_DIR=$(openssl rand -hex 8)
+          mkdir -p "$RANDOM_DIR"
+          echo "📁 پوشه نهایی: $RANDOM_DIR"
+
+          FILE_NAME=$(basename "${{ steps.download.outputs.dilename }}")
+          if [[ -z "$FILE_NAME" ]]; then
+            echo "خطا: نام فایل پیدا نشد!"
+            exit 1
+          fi
+
+          mv "temp_download/$FILE_NAME" "./$RANDOM_DIR/$FILE_NAME"
+          cd "$RANDOM_DIR"
+          
+          echo "✂️ در حال تقسیم فایل به قطعات ۹۵ مگابایتی..."
+          split -b 95M "$FILE_NAME" "part_"
+          rm -f "$FILE_NAME" # فایل اصلی حذف میشه و فقط قطعات می‌مونه
+          cd ..
+
+          echo "RANDOM_DIR_NAME=$RANDOM_DIR" >> $GITHUB_ENV
+
+      - name: آپلود قطعات در مخزن github
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          git add .
+          git commit -m "افزودن قطعات فایل از لینک: ${{ github.event.inputs.file_url }}"
           git push
