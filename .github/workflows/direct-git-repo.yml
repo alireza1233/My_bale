@@ -1,4 +1,4 @@
-name: 'direct-git-repo'
+name: 'دانلود، تقسیم و ذخیره (با نمایش پیشرفت)'
 
 on:
   workflow_dispatch:
@@ -15,22 +15,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: دانلود و تقسیم فایل
+      - name: دانلود با wget
         run: |
           ORIGINAL_NAME=$(basename "${{ github.event.inputs.url }}" | cut -d '?' -f1)
           RANDOM_DIR=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)
           mkdir -p "$RANDOM_DIR"
+          
           echo "📁 پوشه: $RANDOM_DIR"
-
-          echo "📥 در حال دانلود..."
-          curl -L -# -o "$RANDOM_DIR/$ORIGINAL_NAME" "${{ github.event.inputs.url }}"
-
+          echo "📥 در حال دانلود فایل (حدود 1.8 گیگابایت)..."
+          
+          wget -O "$RANDOM_DIR/$ORIGINAL_NAME" --progress=dot:giga "${{ github.event.inputs.url }}"
+          
+          echo "✅ دانلود کامل شد."
+          
           cd "$RANDOM_DIR"
           echo "✂️ تقسیم به قطعات ۹۵ مگابایتی..."
           split -b 95M "$ORIGINAL_NAME" "part_"
           rm -f "$ORIGINAL_NAME"
           cd ..
-
+          
           echo "RANDOM_DIR=$RANDOM_DIR" >> $GITHUB_ENV
 
       - name: ذخیره در مخزن
