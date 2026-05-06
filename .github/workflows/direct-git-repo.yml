@@ -1,0 +1,42 @@
+name: 'direct-git-repo'
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'لینک مستقیم فایل'
+        required: true
+
+jobs:
+  split-and-save:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: دانلود و تقسیم فایل
+        run: |
+          ORIGINAL_NAME=$(basename "${{ github.event.inputs.url }}" | cut -d '?' -f1)
+          RANDOM_DIR=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)
+          mkdir -p "$RANDOM_DIR"
+          echo "📁 پوشه: $RANDOM_DIR"
+
+          echo "📥 در حال دانلود..."
+          curl -L -# -o "$RANDOM_DIR/$ORIGINAL_NAME" "${{ github.event.inputs.url }}"
+
+          cd "$RANDOM_DIR"
+          echo "✂️ تقسیم به قطعات ۹۵ مگابایتی..."
+          split -b 95M "$ORIGINAL_NAME" "part_"
+          rm -f "$ORIGINAL_NAME"
+          cd ..
+
+          echo "RANDOM_DIR=$RANDOM_DIR" >> $GITHUB_ENV
+
+      - name: ذخیره در مخزن
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add "${{ env.RANDOM_DIR }}"
+          git commit -m "افزودن قطعات از ${{ github.event.inputs.url }}"
+          git push
