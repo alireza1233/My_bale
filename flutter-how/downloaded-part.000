@@ -1,0 +1,9 @@
+@echo off
+echo Combining split parts into one 7z archive...
+copy /b flutter-offline.7z.part* flutter-offline-combined.7z
+echo.
+echo Extracting combined archive with 7-Zip...
+7z x flutter-offline-combined.7z -y
+echo.
+echo Done! Run setup.bat to configure environment.
+pause
